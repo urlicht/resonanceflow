@@ -1,4 +1,4 @@
-# hrv-trainer
+# resonanceflow
 
 Production-quality MVP web app for desktop Chrome/Edge that connects to BLE chest straps (for example Wahoo TICKR), streams RR intervals, and runs full HRV analysis in a Web Worker.
 
