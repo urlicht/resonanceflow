@@ -18,6 +18,8 @@ interface BreathingPacerProps {
   hr?: number;
   rr?: number;
   rrSeries?: Point[];
+  liveCoherenceScore?: number;
+  liveCoherenceTrend?: "rising" | "steady" | "falling";
   canStartSession?: boolean;
   onStartSession?: () => void;
   onStopSession?: () => void;
@@ -43,6 +45,8 @@ export function BreathingPacer({
   hr,
   rr,
   rrSeries = [],
+  liveCoherenceScore,
+  liveCoherenceTrend,
   canStartSession,
   onStartSession,
   onStopSession,
@@ -334,6 +338,30 @@ export function BreathingPacer({
   const hrDisplay = typeof hr === "number" && Number.isFinite(hr) ? `${Math.round(hr)} bpm` : "--";
   const rrDisplay =
     typeof rr === "number" && Number.isFinite(rr) ? `${Math.round(rr * 1000)} ms` : "--";
+  const coherenceRatio =
+    typeof liveCoherenceScore === "number" && Number.isFinite(liveCoherenceScore)
+      ? Math.min(1, Math.max(0, liveCoherenceScore))
+      : undefined;
+  const coherenceDegrees = Math.round((coherenceRatio ?? 0) * 360);
+  const coherenceRatioDisplay = typeof coherenceRatio === "number" ? coherenceRatio.toFixed(2) : "--";
+  const coherencePercentDisplay =
+    typeof coherenceRatio === "number" ? `${Math.round(coherenceRatio * 100)}%` : "--";
+  const coherenceBandLabel =
+    typeof coherenceRatio !== "number"
+      ? "Collecting"
+      : coherenceRatio >= 0.45
+        ? "High"
+        : coherenceRatio >= 0.28
+          ? "Moderate"
+          : "Low";
+  const coherenceTrendLabel =
+    typeof coherenceRatio !== "number"
+      ? "Stable"
+      : liveCoherenceTrend === "rising"
+        ? "Rising"
+        : liveCoherenceTrend === "falling"
+          ? "Falling"
+          : "Stable";
 
   const tachogramPath = useMemo(() => {
     if (rrSeries.length < 2) {
@@ -491,19 +519,39 @@ export function BreathingPacer({
                 </div>
               </div>
 
-              <div className="focus-tachogram" aria-label="Live RR Tachogram">
-                <svg viewBox="0 0 520 116" preserveAspectRatio="none">
-                  <path
-                    className="focus-tachogram-baseline"
-                    d="M8 82 L512 82"
-                  />
-                  {tachogramPath ? (
-                    <>
-                      <path className="focus-tachogram-line-glow" d={tachogramPath} />
-                      <path className="focus-tachogram-line" d={tachogramPath} />
-                    </>
-                  ) : null}
-                </svg>
+              <div className="focus-insights-row">
+                <div className="focus-coherence-card" aria-label="Live coherence gauge">
+                  <small>Live Coherence</small>
+                  <div
+                    className="focus-coherence-gauge"
+                    style={{ ["--coherence-progress" as string]: `${coherenceDegrees}deg` }}
+                  >
+                    <div className="focus-coherence-gauge-center">
+                      <strong>{coherenceRatioDisplay}</strong>
+                      <span>Ratio</span>
+                    </div>
+                  </div>
+                  <div className="focus-coherence-meta">
+                    <span>{coherencePercentDisplay}</span>
+                    <span>{coherenceBandLabel}</span>
+                    <span>{coherenceTrendLabel}</span>
+                  </div>
+                </div>
+
+                <div className="focus-tachogram" aria-label="Live RR Tachogram">
+                  <svg viewBox="0 0 520 116" preserveAspectRatio="none">
+                    <path
+                      className="focus-tachogram-baseline"
+                      d="M8 82 L512 82"
+                    />
+                    {tachogramPath ? (
+                      <>
+                        <path className="focus-tachogram-line-glow" d={tachogramPath} />
+                        <path className="focus-tachogram-line" d={tachogramPath} />
+                      </>
+                    ) : null}
+                  </svg>
+                </div>
               </div>
             </div>
 

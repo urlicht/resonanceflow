@@ -20,6 +20,8 @@ interface HRVBSessionViewProps {
   rr?: number;
   signalQualityScore?: number;
   signalQualityLabel?: string;
+  liveCoherenceScore?: number;
+  liveCoherenceTrend?: "rising" | "steady" | "falling";
   hrSeries: Point[];
   rrSeries: Point[];
   bpm: number;
@@ -44,6 +46,8 @@ export function HRVBSessionView({
   rr,
   signalQualityScore,
   signalQualityLabel,
+  liveCoherenceScore,
+  liveCoherenceTrend,
   hrSeries,
   rrSeries,
   bpm,
@@ -159,6 +163,8 @@ export function HRVBSessionView({
         hr={hr}
         rr={rr}
         rrSeries={rrSeries}
+        liveCoherenceScore={liveCoherenceScore}
+        liveCoherenceTrend={liveCoherenceTrend}
         canStartSession={status === "connected"}
         onStartSession={onStart}
         onStopSession={onStop}

@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cleanRrSeries } from "../analysis/artifact";
+import { computeCoherence } from "../analysis/coherence";
+import { resampleRrToUniform, welchPsd } from "../analysis/psd";
 import { HrService } from "../ble/hrService";
 import type { BleConnectionStatus } from "../ble/types";
 import type {
@@ -32,12 +35,18 @@ interface SignalQualityState {
   label: string;
 }
 
+type CoherenceTrend = "rising" | "steady" | "falling";
+
 type Screen = "menu" | "report" | SessionMode;
 
 const LIVE_WINDOW_SECONDS = 5 * 60;
 const HR_CAPACITY = LIVE_WINDOW_SECONDS * 5;
 const RR_CAPACITY = LIVE_WINDOW_SECONDS * 8;
 const SIGNAL_QUALITY_WINDOW_MS = 30_000;
+const LIVE_COHERENCE_WINDOW_SEC = 90;
+const LIVE_COHERENCE_MIN_SPAN_SEC = 45;
+const LIVE_COHERENCE_MIN_POINTS = 24;
+const LIVE_COHERENCE_REFRESH_MS = 3_000;
 const CHART_FPS = 15;
 const CALIBRATION_FREQUENCIES_HZ = [0.07, 0.08, 0.09, 0.1, 0.11, 0.12];
 const CALIBRATION_STEP_SEC = 20;
@@ -207,6 +216,50 @@ function computeSignalQuality(rrWindow_s: number[], staleMs: number): SignalQual
   return staleMs > 8_000 ? { score, label: "No RR Signal" } : { score, label: "Searching" };
 }
 
+function estimateLiveCoherence(rrPoints: Point[], targetHz: number): number | undefined {
+  if (!Number.isFinite(targetHz) || targetHz <= 0 || rrPoints.length < LIVE_COHERENCE_MIN_POINTS) {
+    return undefined;
+  }
+
+  const latestTime = rrPoints[rrPoints.length - 1]?.t;
+  if (!Number.isFinite(latestTime)) {
+    return undefined;
+  }
+
+  const windowed = rrPoints.filter((point) => {
+    const age = latestTime - point.t;
+    return Number.isFinite(point.t) && Number.isFinite(point.v) && age >= 0 && age <= LIVE_COHERENCE_WINDOW_SEC;
+  });
+
+  if (windowed.length < LIVE_COHERENCE_MIN_POINTS) {
+    return undefined;
+  }
+
+  const cleaned = cleanRrSeries(
+    windowed.map((point) => point.t),
+    windowed.map((point) => point.v),
+  );
+
+  if (cleaned.rr_s.length < LIVE_COHERENCE_MIN_POINTS) {
+    return undefined;
+  }
+
+  const span = cleaned.rrTimes_s[cleaned.rrTimes_s.length - 1] - cleaned.rrTimes_s[0];
+  if (!Number.isFinite(span) || span < LIVE_COHERENCE_MIN_SPAN_SEC) {
+    return undefined;
+  }
+
+  const resampled = resampleRrToUniform(cleaned.rrTimes_s, cleaned.rr_s, 4);
+  if (resampled.y.length < 64) {
+    return undefined;
+  }
+
+  const psd = welchPsd(resampled.y, resampled.fs);
+  const coherenceScore = computeCoherence(psd, targetHz).coherenceScore;
+
+  return Number.isFinite(coherenceScore) ? clamp(coherenceScore, 0, 1) : undefined;
+}
+
 export default function App(): JSX.Element {
   const supportsBluetooth = typeof navigator !== "undefined" && "bluetooth" in navigator;
 
@@ -248,12 +301,15 @@ export default function App(): JSX.Element {
     score: 0,
     label: "Searching",
   });
+  const [liveCoherenceScore, setLiveCoherenceScore] = useState<number | undefined>(undefined);
+  const [liveCoherenceTrend, setLiveCoherenceTrend] = useState<CoherenceTrend>("steady");
 
   const hrBufferRef = useRef(new RingBuffer<Point>(HR_CAPACITY));
   const rrBufferRef = useRef(new RingBuffer<Point>(RR_CAPACITY));
   const rrTimelineRef = useRef(0);
   const signalQualityRrRef = useRef<Array<{ t_ms: number; rr_s: number }>>([]);
   const lastRrAtMsRef = useRef<number | null>(null);
+  const liveCoherenceRef = useRef<number | undefined>(undefined);
 
   const hrServiceRef = useRef(new HrService());
   const recorderRef = useRef<SessionRecorder | null>(null);
@@ -298,6 +354,18 @@ export default function App(): JSX.Element {
     }
   }, [hrvbTimerDurationSec, running]);
 
+  const liveCoherenceTargetHz = useMemo(() => {
+    if (screen === "calibration") {
+      return (
+        CALIBRATION_FREQUENCIES_HZ[
+          Math.min(calibrationIndex, CALIBRATION_FREQUENCIES_HZ.length - 1)
+        ] ?? CALIBRATION_FREQUENCIES_HZ[0]
+      );
+    }
+
+    return breathingBpm / 60;
+  }, [breathingBpm, calibrationIndex, screen]);
+
   const recalculateSignalQuality = useCallback(() => {
     const nowMs = Date.now();
     signalQualityRrRef.current = signalQualityRrRef.current.filter(
@@ -327,6 +395,47 @@ export default function App(): JSX.Element {
       window.clearInterval(timer);
     };
   }, [recalculateSignalQuality]);
+
+  useEffect(() => {
+    if (!running) {
+      liveCoherenceRef.current = undefined;
+      setLiveCoherenceScore(undefined);
+      setLiveCoherenceTrend("steady");
+      return;
+    }
+
+    const refreshLiveCoherence = (): void => {
+      const nextScore = estimateLiveCoherence(rrBufferRef.current.toArray(), liveCoherenceTargetHz);
+
+      if (typeof nextScore !== "number") {
+        liveCoherenceRef.current = undefined;
+        setLiveCoherenceScore(undefined);
+        setLiveCoherenceTrend("steady");
+        return;
+      }
+
+      const previousScore = liveCoherenceRef.current;
+      liveCoherenceRef.current = nextScore;
+
+      const delta = typeof previousScore === "number" ? nextScore - previousScore : 0;
+      const nextTrend: CoherenceTrend =
+        delta > 0.015 ? "rising" : delta < -0.015 ? "falling" : "steady";
+
+      setLiveCoherenceScore((previous) => {
+        if (typeof previous === "number" && Math.abs(previous - nextScore) < 0.001) {
+          return previous;
+        }
+        return nextScore;
+      });
+      setLiveCoherenceTrend((previous) => (previous === nextTrend ? previous : nextTrend));
+    };
+
+    refreshLiveCoherence();
+    const timer = window.setInterval(refreshLiveCoherence, LIVE_COHERENCE_REFRESH_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [liveCoherenceTargetHz, running]);
 
   const clearTimers = useCallback(() => {
     if (measurementTimerRef.current !== null) {
@@ -358,6 +467,9 @@ export default function App(): JSX.Element {
     rrTimelineRef.current = performance.now() / 1000;
     signalQualityRrRef.current = [];
     lastRrAtMsRef.current = null;
+    liveCoherenceRef.current = undefined;
+    setLiveCoherenceScore(undefined);
+    setLiveCoherenceTrend("steady");
   }, []);
 
   const analyzeInWorker = useCallback((payload: AnalyzePayload): Promise<AnalysisResult> => {
@@ -851,6 +963,8 @@ export default function App(): JSX.Element {
               rr={liveRr}
               signalQualityScore={signalQuality.score}
               signalQualityLabel={signalQuality.label}
+              liveCoherenceScore={liveCoherenceScore}
+              liveCoherenceTrend={liveCoherenceTrend}
               hrSeries={hrSeries}
               rrSeries={rrSeries}
               bpm={breathingBpm}
@@ -895,6 +1009,8 @@ export default function App(): JSX.Element {
               rr={liveRr}
               signalQualityScore={signalQuality.score}
               signalQualityLabel={signalQuality.label}
+              liveCoherenceScore={liveCoherenceScore}
+              liveCoherenceTrend={liveCoherenceTrend}
               hrSeries={hrSeries}
               rrSeries={rrSeries}
               summary={calibrationSummary}
