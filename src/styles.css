@@ -810,6 +810,14 @@ p {
   color: #f2f8ff;
 }
 
+.focus-overlay-actions .button-secondary.focus-session-button {
+  background: rgba(255, 111, 142, 0.22);
+  border-color: rgba(255, 176, 197, 0.75);
+  color: #fff2f6;
+  font-weight: 620;
+  box-shadow: 0 14px 28px -20px rgba(255, 111, 142, 0.88);
+}
+
 .focus-overlay-actions .focus-session-button {
   min-width: 132px;
 }

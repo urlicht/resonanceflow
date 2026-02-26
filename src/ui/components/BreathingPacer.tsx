@@ -56,6 +56,7 @@ export function BreathingPacer({
   const cueAudioContextRef = useRef<AudioContext | null>(null);
   const ambientAudioRef = useRef<AmbientAudioNodes | null>(null);
   const previousInhaleStateRef = useRef<boolean | null>(null);
+  const previousRunningRef = useRef(Boolean(running));
 
   useEffect(() => {
     let frameId = 0;
@@ -295,6 +296,17 @@ export function BreathingPacer({
       document.removeEventListener("fullscreenchange", onFullscreenChange);
     };
   }, [focusModeActive]);
+
+  useEffect(() => {
+    const wasRunning = previousRunningRef.current;
+    const isRunning = Boolean(running);
+
+    if (focusModeActive && wasRunning && !isRunning) {
+      exitFocusMode();
+    }
+
+    previousRunningRef.current = isRunning;
+  }, [exitFocusMode, focusModeActive, running]);
 
   useEffect(() => {
     if (focusModeActive && ambientMusicEnabled) {
